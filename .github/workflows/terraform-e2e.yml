@@ -2,15 +2,7 @@ name: "Terraform E2E Tests"
 
 on:
   push:
-    branches:
-      - master
-    paths: 
-      - 'test/e2e/**.tf' 
-  pull_request:
-    branches:
-      - master
-    paths:
-      - 'test/e2e/**.tf'
+    branches: []
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

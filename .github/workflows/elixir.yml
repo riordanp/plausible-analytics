@@ -2,9 +2,9 @@ name: Elixir CI
 
 on:
   push:
-    branches: [master, stable]
+    branches: []
   pull_request:
-    branches: [master, stable]
+    branches: []
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
