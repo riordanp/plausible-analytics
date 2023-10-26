@@ -119,13 +119,13 @@ build_metadata =
     {:error, error} ->
       error = Exception.format(:error, error)
 
-      Logger.warn("""
+      Logger.warning("""
       failed to parse $BUILD_METADATA: #{error}
 
           $BUILD_METADATA is set to #{build_metadata_raw}\
       """)
 
-      Logger.warn("falling back to empty build metadata, as if $BUILD_METADATA was set to {}")
+      Logger.warning("falling back to empty build metadata, as if $BUILD_METADATA was set to {}")
 
       _fallback = %{}
   end
@@ -164,10 +164,11 @@ ip_geolocation_db = get_var_from_path_or_env(config_dir, "IP_GEOLOCATION_DB", ge
 geonames_source_file = get_var_from_path_or_env(config_dir, "GEONAMES_SOURCE_FILE")
 maxmind_license_key = get_var_from_path_or_env(config_dir, "MAXMIND_LICENSE_KEY")
 maxmind_edition = get_var_from_path_or_env(config_dir, "MAXMIND_EDITION", "GeoLite2-City")
+maxmind_cache_dir = get_var_from_path_or_env(config_dir, "PERSISTENT_CACHE_DIR")
 
 if System.get_env("DISABLE_AUTH") do
   require Logger
-  Logger.warn("DISABLE_AUTH env var is no longer supported")
+  Logger.warning("DISABLE_AUTH env var is no longer supported")
 end
 
 enable_email_verification =
@@ -440,8 +441,6 @@ base_cron = [
   {"0 12 * * *", Plausible.Workers.SendCheckStatsEmails},
   # Every 15 minutes
   {"*/15 * * * *", Plausible.Workers.SpikeNotifier},
-  # Every day at midnight
-  {"0 0 * * *", Plausible.Workers.CleanEmailVerificationCodes},
   # Every day at 1am
   {"0 1 * * *", Plausible.Workers.CleanInvitations},
   # Every 2 hours
@@ -468,7 +467,6 @@ base_queues = [
   spike_notifications: 1,
   check_stats_emails: 1,
   site_setup_emails: 1,
-  clean_email_verification_codes: 1,
   clean_invitations: 1,
   google_analytics_imports: 1,
   domain_change_transition: 1
@@ -511,6 +509,9 @@ end
 config :plausible, :hcaptcha,
   sitekey: hcaptcha_sitekey,
   secret: hcaptcha_secret
+
+nolt_sso_secret = get_var_from_path_or_env(config_dir, "NOLT_SSO_SECRET")
+config :joken, default_signer: nolt_sso_secret
 
 config :plausible, Plausible.Sentry.Client,
   finch_request_opts: [
@@ -560,6 +561,7 @@ geo_opts =
       [
         license_key: maxmind_license_key,
         edition: maxmind_edition,
+        cache_dir: maxmind_cache_dir,
         async: true
       ]
 

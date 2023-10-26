@@ -4,11 +4,14 @@ defmodule PlausibleWeb.Live.ChoosePlan do
   """
   use Phoenix.LiveView
   use Phoenix.HTML
-  alias Plausible.Users
-  alias Plausible.Billing.{Plans, Plan, Quota}
-  alias PlausibleWeb.Router.Helpers, as: Routes
 
   import PlausibleWeb.Components.Billing
+
+  require Plausible.Billing.Subscription.Status
+
+  alias Plausible.Users
+  alias Plausible.Billing.{Plans, Plan, Quota, Subscription}
+  alias PlausibleWeb.Router.Helpers, as: Routes
 
   @contact_link "https://plausible.io/contact"
   @billing_faq_link "https://plausible.io/docs/billing"
@@ -61,46 +64,60 @@ defmodule PlausibleWeb.Live.ChoosePlan do
   end
 
   def render(assigns) do
+    growth_plan_to_render =
+      assigns.selected_growth_plan || List.last(assigns.available_plans.growth)
+
+    business_plan_to_render =
+      assigns.selected_business_plan || List.last(assigns.available_plans.business)
+
+    growth_benefits = growth_benefits(growth_plan_to_render)
+
+    business_benefits = business_benefits(business_plan_to_render, growth_benefits)
+
+    assigns =
+      assigns
+      |> assign(:growth_plan_to_render, growth_plan_to_render)
+      |> assign(:business_plan_to_render, business_plan_to_render)
+      |> assign(:growth_benefits, growth_benefits)
+      |> assign(:business_benefits, business_benefits)
+      |> assign(:enterprise_benefits, enterprise_benefits(business_benefits))
+
     ~H"""
     <div class="bg-gray-100 dark:bg-gray-900 pt-1 pb-12 sm:pb-16 text-gray-900 dark:text-gray-100">
-      <div class="mx-auto max-w-7xl px-6 lg:px-8">
+      <div class="mx-auto max-w-7xl px-6 lg:px-20">
         <.subscription_past_due_notice class="pb-2" subscription={@user.subscription} />
         <.subscription_paused_notice class="pb-2" subscription={@user.subscription} />
         <div class="mx-auto max-w-4xl text-center">
-          <p class="text-4xl font-bold tracking-tight sm:text-5xl">
+          <p class="text-4xl font-bold tracking-tight lg:text-5xl">
             <%= if @owned_plan,
               do: "Change subscription plan",
               else: "Upgrade your account" %>
           </p>
         </div>
-        <.interval_picker selected_interval={@selected_interval} />
-        <.slider selected_volume={@selected_volume} available_volumes={@available_volumes} />
+        <div class="mt-12 max-w-md lg:max-w-none mx-auto flex flex-col  lg:flex-row-reverse justify-between">
+          <.interval_picker selected_interval={@selected_interval} />
+          <.slider selected_volume={@selected_volume} available_volumes={@available_volumes} />
+        </div>
         <div class="mt-6 isolate mx-auto grid max-w-md grid-cols-1 gap-8 lg:mx-0 lg:max-w-none lg:grid-cols-3">
           <.plan_box
             kind={:growth}
             owned={@owned_plan && Map.get(@owned_plan, :kind) == :growth}
-            plan_to_render={
-              if @selected_growth_plan,
-                do: @selected_growth_plan,
-                else: List.last(@available_plans.growth)
-            }
+            plan_to_render={@growth_plan_to_render}
+            benefits={@growth_benefits}
             available={!!@selected_growth_plan}
             {assigns}
           />
           <.plan_box
             kind={:business}
             owned={@owned_plan && Map.get(@owned_plan, :kind) == :business}
-            plan_to_render={
-              if @selected_business_plan,
-                do: @selected_business_plan,
-                else: List.last(@available_plans.business)
-            }
+            plan_to_render={@business_plan_to_render}
+            benefits={@business_benefits}
             available={!!@selected_business_plan}
             {assigns}
           />
-          <.enterprise_plan_box />
+          <.enterprise_plan_box benefits={@enterprise_benefits} />
         </div>
-        <p class="mx-auto mt-2 max-w-2xl text-center text-lg leading-8 text-gray-600 dark:text-gray-400">
+        <p class="mx-auto mt-8 max-w-2xl text-center text-lg leading-8 text-gray-600 dark:text-gray-400">
           <.usage usage={@usage} />
         </p>
         <.pageview_limit_notice :if={!@owned_plan} />
@@ -163,12 +180,12 @@ defmodule PlausibleWeb.Live.ChoosePlan do
 
   defp interval_picker(assigns) do
     ~H"""
-    <div class="mt-6 flex justify-center">
-      <div class="flex flex-col">
-        <.two_months_free active={@selected_interval == :yearly} />
-        <fieldset class="grid grid-cols-2 gap-x-1 rounded-full p-1 text-center text-xs font-semibold leading-5 ring-1 ring-inset ring-gray-300 dark:ring-gray-600">
+    <div class="mt-4 lg:flex justify-center self-start lg:self-end">
+      <div class="relative ">
+        <.two_months_free />
+        <fieldset class="grid grid-cols-2 gap-x-1 rounded-full bg-white dark:bg-gray-700 p-1 text-center text-sm font-semibold leading-5 shadow dark:ring-gray-600">
           <label
-            class={"cursor-pointer rounded-full px-2.5 py-1 #{if @selected_interval == :monthly, do: "bg-indigo-600 text-white"}"}
+            class={"cursor-pointer rounded-full px-2.5 py-1 text-gray-900 dark:text-white #{if @selected_interval == :monthly, do: "bg-indigo-600 text-white"}"}
             phx-click="set_interval"
             phx-value-interval="monthly"
           >
@@ -176,7 +193,7 @@ defmodule PlausibleWeb.Live.ChoosePlan do
             <span>Monthly</span>
           </label>
           <label
-            class={"cursor-pointer rounded-full px-2.5 py-1 #{if @selected_interval == :yearly, do: "bg-indigo-600 text-white"}"}
+            class={"cursor-pointer rounded-full px-2.5 py-1 text-gray-900 dark:text-white #{if @selected_interval == :yearly, do: "bg-indigo-600 text-white"}"}
             phx-click="set_interval"
             phx-value-interval="yearly"
           >
@@ -191,33 +208,25 @@ defmodule PlausibleWeb.Live.ChoosePlan do
 
   def two_months_free(assigns) do
     ~H"""
-    <div class="grid grid-cols-2 gap-x-1">
-      <div></div>
-      <span
-        id="two-months-free"
-        class={[
-          "mb-1 block whitespace-no-wrap w-max px-2.5 py-0.5 rounded-full text-xs font-medium leading-4 ring-1",
-          @active &&
-            "bg-yellow-100 ring-yellow-700 text-yellow-700 dark:text-yellow-200 dark:bg-inherit dark:ring-1 dark:ring-yellow-200",
-          !@active && "text-gray-500 ring-gray-300 dark:text-gray-400 dark:ring-gray-600"
-        ]}
-      >
-        2 months free
-      </span>
-    </div>
+    <span class="absolute -right-16 -top-3 whitespace-no-wrap w-max px-2.5 py-0.5 rounded-full text-xs font-medium leading-4 bg-yellow-100 border border-yellow-300 text-yellow-700">
+      2 months free
+    </span>
     """
   end
 
   defp slider(assigns) do
     ~H"""
-    <form class="mt-4 max-w-2xl mx-auto">
-      <p class="text-xl text-gray-600 dark:text-gray-400 text-center">
-        Monthly pageviews: <b><%= slider_value(@selected_volume, @available_volumes) %></b>
+    <form class="w-full lg:w-2/5 mt-4 ">
+      <p class="font-medium leading-6 text-gray-600 dark:text-gray-200">
+        <b id="slider-value" class="text-xl text-gray-900 dark:text-gray-100">
+          <%= slider_value(@selected_volume, @available_volumes) %>
+        </b>
+        monthly pageviews
       </p>
       <input
         phx-change="slide"
         name="slider"
-        class="shadow-md border border-gray-200 dark:bg-gray-600 dark:border-none"
+        class="mt-4 shadow dark:bg-gray-600 dark:border-none"
         type="range"
         min="0"
         max={length(@available_volumes)}
@@ -235,16 +244,16 @@ defmodule PlausibleWeb.Live.ChoosePlan do
     <div
       id={"#{@kind}-plan-box"}
       class={[
-        "rounded-3xl px-6 sm:px-8 py-4 sm:py-6 dark:bg-gray-800",
-        !@owned && "ring-1 ring-gray-300 dark:ring-gray-600",
-        @owned && "ring-2 ring-indigo-600"
+        "shadow-lg bg-white rounded-3xl px-6 sm:px-8 py-4 sm:py-6 dark:bg-gray-800",
+        !@owned && "dark:ring-gray-600",
+        @owned && "ring-2 ring-indigo-600 dark:ring-indigo-300"
       ]}
     >
       <div class="flex items-center justify-between gap-x-4">
         <h3 class={[
           "text-lg font-semibold leading-8",
           !@owned && "text-gray-900 dark:text-gray-100",
-          @owned && "text-indigo-600"
+          @owned && "text-indigo-600 dark:text-indigo-300"
         ]}>
           <%= String.capitalize(to_string(@kind)) %>
         </h3>
@@ -255,7 +264,7 @@ defmodule PlausibleWeb.Live.ChoosePlan do
         <%= cond do %>
           <% !@available -> %>
             <.contact_button class="bg-indigo-600 hover:bg-indigo-500 text-white" />
-          <% @owned_plan && @user.subscription && @user.subscription.status in ["active", "past_due", "paused"] -> %>
+          <% @owned_plan && Plausible.Billing.Subscriptions.resumable?(@user.subscription) -> %>
             <.render_change_plan_link
               paddle_product_id={get_paddle_product_id(@plan_to_render, @selected_interval)}
               text={
@@ -270,35 +279,39 @@ defmodule PlausibleWeb.Live.ChoosePlan do
             />
           <% true -> %>
             <.paddle_button
+              id={"#{@kind}-checkout"}
               paddle_product_id={get_paddle_product_id(@plan_to_render, @selected_interval)}
               {assigns}
-            />
+            >
+              Upgrade
+            </.paddle_button>
         <% end %>
       </div>
-      <ul
-        role="list"
-        class="mt-8 space-y-3 text-sm leading-6 text-gray-600 dark:text-gray-100 xl:mt-10"
-      >
-        <li class="flex gap-x-3">
-          <.check_icon class="text-indigo-600 dark:text-green-600" /> 5 products
-        </li>
-        <li class="flex gap-x-3">
-          <.check_icon class="text-indigo-600 dark:text-green-600" /> Up to 1,000 subscribers
-        </li>
-        <li class="flex gap-x-3">
-          <.check_icon class="text-indigo-600 dark:text-green-600" /> Basic analytics
-        </li>
-        <li class="flex gap-x-3">
-          <.check_icon class="text-indigo-600 dark:text-green-600" /> 48-hour support response time
-        </li>
-      </ul>
+      <%= if @kind == :growth && @plan_to_render.generation < 4 do %>
+        <.growth_grandfathering_notice />
+      <% else %>
+        <ul
+          role="list"
+          class="mt-8 space-y-3 text-sm leading-6 text-gray-600 dark:text-gray-100 xl:mt-10"
+        >
+          <.plan_benefit :for={benefit <- @benefits}><%= benefit %></.plan_benefit>
+        </ul>
+      <% end %>
     </div>
+    """
+  end
+
+  defp growth_grandfathering_notice(assigns) do
+    ~H"""
+    <ul class="mt-8 space-y-3 text-sm leading-6 text-gray-600 text-justify dark:text-gray-100 xl:mt-10">
+      Your subscription has been grandfathered in at the same rate and terms as when you first joined. If you don't need the "Business" features, you're welcome to stay on this plan. You can adjust the pageview limit or change the billing frequency of this grandfathered plan. If you're interested in business features, you can upgrade to the new "Business" plan.
+    </ul>
     """
   end
 
   def render_price_info(%{available: false} = assigns) do
     ~H"""
-    <p class="mt-6 flex items-baseline gap-x-1">
+    <p id={"#{@kind}-custom-price"} class="mt-6 flex items-baseline gap-x-1">
       <span class="text-4xl font-bold tracking-tight text-gray-900 dark:text-white">
         Custom
       </span>
@@ -325,7 +338,8 @@ defmodule PlausibleWeb.Live.ChoosePlan do
     <.change_plan_link
       plan_already_owned={@text == "Currently on this plan"}
       billing_details_expired={
-        @user.subscription && @user.subscription.status in ["past_due", "paused"]
+        @user.subscription &&
+          @user.subscription.status in [Subscription.Status.past_due(), Subscription.Status.paused()]
       }
       {assigns}
     />
@@ -336,7 +350,7 @@ defmodule PlausibleWeb.Live.ChoosePlan do
     ~H"""
     <.link
       id={"#{@kind}-checkout"}
-      href={"/billing/change-plan/preview/" <> @paddle_product_id}
+      href={Routes.billing_path(PlausibleWeb.Endpoint, :change_plan_preview, @paddle_product_id)}
       class={[
         "w-full mt-6 block rounded-md py-2 px-3 text-center text-sm font-semibold leading-6 text-white",
         !(@plan_already_owned || @billing_details_expired) && "bg-indigo-600 hover:bg-indigo-500",
@@ -355,15 +369,15 @@ defmodule PlausibleWeb.Live.ChoosePlan do
     """
   end
 
-  defp paddle_button(assigns) do
+  slot :inner_block, required: true
+  attr :icon_color, :string, default: "indigo-600"
+
+  defp plan_benefit(assigns) do
     ~H"""
-    <button
-      id={"#{@kind}-checkout"}
-      onclick={"Paddle.Checkout.open(#{Jason.encode!(%{product: @paddle_product_id, email: @user.email, disableLogout: true, passthrough: @user.id, success: Routes.billing_path(PlausibleWeb.Endpoint, :upgrade_success), theme: "none"})})"}
-      class="w-full mt-6 block rounded-md py-2 px-3 text-center text-sm font-semibold leading-6 text-white bg-indigo-600 hover:bg-indigo-500"
-    >
-      Upgrade
-    </button>
+    <li class="flex gap-x-3">
+      <.check_icon class={"text-#{@icon_color} dark:text-green-600"} />
+      <%= render_slot(@inner_block) %>
+    </li>
     """
   end
 
@@ -383,7 +397,10 @@ defmodule PlausibleWeb.Live.ChoosePlan do
 
   defp enterprise_plan_box(assigns) do
     ~H"""
-    <div class="rounded-3xl px-6 sm:px-8 py-4 sm:py-6 ring-1 bg-gray-900 ring-gray-900 dark:bg-gray-800 dark:ring-gray-600">
+    <div
+      id="enterprise-plan-box"
+      class="rounded-3xl px-6 sm:px-8 py-4 sm:py-6 bg-gray-900 shadow-xl dark:bg-gray-800 dark:ring-gray-600"
+    >
       <h3 class="text-lg font-semibold leading-8 text-white dark:text-gray-100">Enterprise</h3>
       <p class="mt-6 flex items-baseline gap-x-1">
         <span class="text-4xl font-bold tracking-tight text-white dark:text-gray-100">
@@ -392,26 +409,13 @@ defmodule PlausibleWeb.Live.ChoosePlan do
       </p>
       <p class="h-4 mt-1"></p>
       <.contact_button class="" />
-      <ul role="list" class="mt-8 space-y-3 text-sm leading-6 xl:mt-10 text-gray-300">
-        <li class="flex gap-x-3">
-          <.check_icon class="text-white dark:text-green-600" /> Unlimited products
-        </li>
-        <li class="flex gap-x-3">
-          <.check_icon class="text-white dark:text-green-600" /> Unlimited subscribers
-        </li>
-        <li class="flex gap-x-3">
-          <.check_icon class="text-white dark:text-green-600" /> Advanced analytics
-        </li>
-        <li class="flex gap-x-3">
-          <.check_icon class="text-white dark:text-green-600" />
-          1-hour, dedicated support response time
-        </li>
-        <li class="flex gap-x-3">
-          <.check_icon class="text-white dark:text-green-600" /> Marketing automations
-        </li>
-        <li class="flex gap-x-3">
-          <.check_icon class="text-white dark:text-green-600" /> Custom reporting tools
-        </li>
+      <ul
+        role="list"
+        class="mt-8 space-y-3 text-sm leading-6 xl:mt-10 text-gray-300 dark:text-gray-100"
+      >
+        <.plan_benefit :for={benefit <- @benefits}>
+          <%= if is_binary(benefit), do: benefit, else: benefit.(assigns) %>
+        </.plan_benefit>
       </ul>
     </div>
     """
@@ -422,7 +426,7 @@ defmodule PlausibleWeb.Live.ChoosePlan do
     <div class="flex items-center justify-between gap-x-4">
       <p
         id="current-label"
-        class="rounded-full bg-indigo-600/10 px-2.5 py-1 text-xs font-semibold leading-5 text-indigo-600 dark:ring-1 dark:ring-indigo-600/40"
+        class="rounded-full bg-indigo-600/10 px-2.5 py-1 text-xs font-semibold leading-5 text-indigo-600 dark:text-indigo-300 dark:ring-1 dark:ring-indigo-300/50"
       >
         Current
       </p>
@@ -479,7 +483,7 @@ defmodule PlausibleWeb.Live.ChoosePlan do
 
   defp price_tag(%{plan_to_render: %Plan{monthly_cost: nil}} = assigns) do
     ~H"""
-    <span class="text-4xl font-bold tracking-tight text-gray-900">
+    <span class="text-4xl font-bold tracking-tight text-gray-900 dark:text-gray-100">
       N/A
     </span>
     """
@@ -519,19 +523,6 @@ defmodule PlausibleWeb.Live.ChoosePlan do
     """
   end
 
-  defp paddle_script(assigns) do
-    ~H"""
-    <script type="text/javascript" src="https://cdn.paddle.com/paddle/paddle.js">
-    </script>
-    <script :if={Application.get_env(:plausible, :environment) == "dev"}>
-      Paddle.Environment.set('sandbox')
-    </script>
-    <script>
-      Paddle.Setup({vendor: <%= Application.get_env(:plausible, :paddle) |> Keyword.fetch!(:vendor_id) %> })
-    </script>
-    """
-  end
-
   defp slider_styles(assigns) do
     ~H"""
     <style>
@@ -542,8 +533,7 @@ defmodule PlausibleWeb.Live.ChoosePlan do
         border-radius: 3px;
         height: 6px;
         width: 100%;
-        margin-top: 25px;
-        margin-bottom: 15px;
+        margin-bottom: 9px;
         outline: none;
       }
 
@@ -557,8 +547,8 @@ defmodule PlausibleWeb.Live.ChoosePlan do
         border: 0;
         border-radius: 50%;
         cursor: pointer;
-        height: 36px;
-        width: 36px;
+        height: 28px;
+        width: 28px;
       }
 
       input[type="range"]::-moz-range-thumb {
@@ -570,8 +560,8 @@ defmodule PlausibleWeb.Live.ChoosePlan do
         border: none;
         border-radius: 50%;
         cursor: pointer;
-        height: 36px;
-        width: 36px;
+        height: 28px;
+        width: 28px;
       }
 
       input[type="range"]::-ms-thumb {
@@ -582,8 +572,8 @@ defmodule PlausibleWeb.Live.ChoosePlan do
         border: 0;
         border-radius: 50%;
         cursor: pointer;
-        height: 36px;
-        width: 36px;
+        height: 28px;
+        width: 28px;
       }
 
       input[type="range"]::-moz-focus-outer {
@@ -640,6 +630,77 @@ defmodule PlausibleWeb.Live.ChoosePlan do
 
   defp slider_value(volume, _) when is_integer(volume) do
     PlausibleWeb.StatsView.large_number_format(volume)
+  end
+
+  defp growth_benefits(plan) do
+    [
+      team_member_limit_benefit(plan),
+      site_limit_benefit(plan),
+      "Intuitive, fast and privacy-friendly dashboard",
+      "Email/Slack reports",
+      "Google Analytics import"
+    ]
+    |> Kernel.++(feature_benefits(plan))
+  end
+
+  defp business_benefits(plan, growth_benefits) do
+    [
+      "Everything in Growth",
+      team_member_limit_benefit(plan),
+      site_limit_benefit(plan)
+    ]
+    |> Kernel.++(feature_benefits(plan))
+    |> Kernel.--(growth_benefits)
+    |> Kernel.++(["Priority support"])
+  end
+
+  defp enterprise_benefits(business_benefits) do
+    team_members =
+      if "Up to 10 team members" in business_benefits,
+        do: "10+ team members",
+        else: nil
+
+    [
+      "Everything in Business",
+      team_members,
+      "50+ sites",
+      &sites_api_benefit/1,
+      "Technical onboarding"
+    ]
+    |> Enum.filter(& &1)
+  end
+
+  defp team_member_limit_benefit(%Plan{} = plan) do
+    case plan.team_member_limit do
+      :unlimited -> "Unlimited team members"
+      number -> "Up to #{number} team members"
+    end
+  end
+
+  defp site_limit_benefit(%Plan{} = plan), do: "Up to #{plan.site_limit} sites"
+
+  defp feature_benefits(%Plan{} = plan) do
+    Enum.map(plan.features, fn feature_mod ->
+      case feature_mod.name() do
+        :goals -> "Goals and custom events"
+        :revenue_goals -> "Ecommerce revenue attribution"
+        _ -> feature_mod.display_name()
+      end
+    end)
+  end
+
+  defp sites_api_benefit(assigns) do
+    ~H"""
+    <p>
+      Sites API access for
+      <.link
+        class="text-indigo-500 hover:text-indigo-400"
+        href="https://plausible.io/white-label-web-analytics"
+      >
+        reselling
+      </.link>
+    </p>
+    """
   end
 
   defp contact_link(), do: @contact_link

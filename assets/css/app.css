@@ -41,11 +41,8 @@ html {
 body {
 	-webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  width:100vw;  /* Prevents content from jumping when scrollbar is added/removed due to vertical overflow */
   overflow-x: hidden;
-}
-
-button:disabled {
-  cursor: default;
 }
 
 blockquote {

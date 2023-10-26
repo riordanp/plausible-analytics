@@ -171,6 +171,7 @@ defmodule PlausibleWeb.Router do
     post "/password/request-reset", AuthController, :password_reset_request
     get "/password/reset", AuthController, :password_reset_form
     post "/password/reset", AuthController, :password_reset
+    get "/avatar/:hash", AvatarController, :avatar
     post "/error_report", ErrorReportController, :submit_error_report
   end
 
@@ -187,6 +188,8 @@ defmodule PlausibleWeb.Router do
     get "/logout", AuthController, :logout
     get "/settings", AuthController, :user_settings
     put "/settings", AuthController, :save_settings
+    put "/settings/email", AuthController, :update_email
+    post "/settings/email/cancel", AuthController, :cancel_update_email
     delete "/me", AuthController, :delete_me
     get "/settings/api-keys/new", AuthController, :new_api_key
     post "/settings/api-keys", AuthController, :create_api_key
@@ -201,7 +204,7 @@ defmodule PlausibleWeb.Router do
     post "/billing/change-plan/:new_plan_id", BillingController, :change_plan
     get "/billing/upgrade", BillingController, :upgrade
     get "/billing/choose-plan", BillingController, :choose_plan
-    get "/billing/upgrade/:plan_id", BillingController, :upgrade_to_plan
+    get "/billing/upgrade-to-enterprise-plan", BillingController, :upgrade_to_enterprise_plan
     get "/billing/upgrade/enterprise/:plan_id", BillingController, :upgrade_enterprise_plan
     get "/billing/change-plan/enterprise/:plan_id", BillingController, :change_enterprise_plan
     get "/billing/upgrade-success", BillingController, :upgrade_success
@@ -281,10 +284,10 @@ defmodule PlausibleWeb.Router do
     get "/:website/settings/properties", SiteController, :settings_props
     get "/:website/settings/funnels", SiteController, :settings_funnels
 
-    get "/:website/settings/search-console", SiteController, :settings_search_console
     get "/:website/settings/email-reports", SiteController, :settings_email_reports
     get "/:website/settings/custom-domain", SiteController, :settings_custom_domain
     get "/:website/settings/danger-zone", SiteController, :settings_danger_zone
+    get "/:website/settings/integrations", SiteController, :settings_integrations
 
     put "/:website/settings/features/visibility/:setting",
         SiteController,

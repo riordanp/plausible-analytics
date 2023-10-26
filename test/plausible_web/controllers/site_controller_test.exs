@@ -6,6 +6,8 @@ defmodule PlausibleWeb.SiteControllerTest do
 
   import ExUnit.CaptureLog
   import Mox
+  import Plausible.Test.Support.HTML
+
   setup :verify_on_exit!
 
   describe "GET /sites/new" do
@@ -326,10 +328,8 @@ defmodule PlausibleWeb.SiteControllerTest do
       resp = html_response(conn, 200)
 
       assert resp =~ "Site Timezone"
-      assert resp =~ "Data Import from Google Analytics"
-      assert resp =~ "https://accounts.google.com/o/oauth2/v2/auth?"
-      assert resp =~ "analytics.readonly"
-      refute resp =~ "webmasters.readonly"
+      assert resp =~ "Site Domain"
+      assert resp =~ "JavaScript Snippet"
     end
   end
 
@@ -396,8 +396,9 @@ defmodule PlausibleWeb.SiteControllerTest do
       _my_site = insert(:site, memberships: [build(:site_membership, user: me, role: :owner)])
 
       other_user = insert(:user)
-      other_site = insert(:site)
-      insert(:site_membership, site: other_site, user: other_user, role: "owner")
+
+      other_site =
+        insert(:site, memberships: [build(:site_membership, user: other_user, role: "owner")])
 
       my_conn = post(my_conn, "/sites/#{other_site.domain}/make-public")
       assert my_conn.status == 404
@@ -447,8 +448,10 @@ defmodule PlausibleWeb.SiteControllerTest do
       _my_site = insert(:site, memberships: [build(:site_membership, user: me, role: :owner)])
 
       other_user = insert(:user)
-      other_site = insert(:site)
-      insert(:site_membership, site: other_site, user: other_user, role: "owner")
+
+      other_site =
+        insert(:site, memberships: [build(:site_membership, user: other_user, role: "owner")])
+
       insert(:google_auth, user: other_user, site: other_site)
       insert(:custom_domain, site: other_site)
       insert(:spike_notification, site: other_site)
@@ -472,7 +475,7 @@ defmodule PlausibleWeb.SiteControllerTest do
 
       updated_auth = Repo.one(Plausible.Site.GoogleAuth)
       assert updated_auth.property == "some-new-property.com"
-      assert redirected_to(conn, 302) == "/#{site.domain}/settings/search-console"
+      assert redirected_to(conn, 302) == "/#{site.domain}/settings/integrations"
     end
   end
 
@@ -484,7 +487,7 @@ defmodule PlausibleWeb.SiteControllerTest do
       conn = delete(conn, "/#{site.domain}/settings/google-search")
 
       refute Repo.exists?(Plausible.Site.GoogleAuth)
-      assert redirected_to(conn, 302) == "/#{site.domain}/settings/search-console"
+      assert redirected_to(conn, 302) == "/#{site.domain}/settings/integrations"
     end
 
     test "fails to delete associated google auth from the outside", %{
@@ -500,11 +503,17 @@ defmodule PlausibleWeb.SiteControllerTest do
     end
   end
 
-  describe "GET /:website/settings/search-console for self-hosting" do
+  describe "GET /:website/settings/integrations for self-hosting" do
     setup [:create_user, :log_in, :create_site]
 
+    setup_patch_env(:google,
+      client_id: nil,
+      client_secret: nil,
+      api_url: "https://www.googleapis.com"
+    )
+
     test "display search console settings", %{conn: conn, site: site} do
-      conn = get(conn, "/#{site.domain}/settings/search-console")
+      conn = get(conn, "/#{site.domain}/settings/integrations")
       resp = html_response(conn, 200)
       assert resp =~ "An extra step is needed"
       assert resp =~ "Google Search Console integration"
@@ -512,7 +521,7 @@ defmodule PlausibleWeb.SiteControllerTest do
     end
   end
 
-  describe "GET /:website/settings/search-console" do
+  describe "GET /:website/integrations (search-console)" do
     setup [:create_user, :log_in, :create_site]
 
     setup_patch_env(:google, client_id: "some", api_url: "https://www.googleapis.com")
@@ -525,12 +534,14 @@ defmodule PlausibleWeb.SiteControllerTest do
     test "displays Continue with Google link", %{conn: conn, user: user} do
       site = insert(:site, domain: "notconnectedyet.example.com", members: [user])
 
-      conn = get(conn, "/#{site.domain}/settings/search-console")
+      conn = get(conn, "/#{site.domain}/settings/integrations")
       resp = html_response(conn, 200)
-      assert resp =~ "Continue with Google"
-      assert resp =~ "https://accounts.google.com/o/oauth2/v2/auth?"
-      assert resp =~ "webmasters.readonly"
-      refute resp =~ "analytics.readonly"
+
+      assert button = find(resp, "button#search-console-connect")
+      assert text(button) == "Continue with Google"
+      assert text_of_attr(button, "data-to") =~ "https://accounts.google.com/o/oauth2/v2/auth?"
+      assert text_of_attr(button, "data-to") =~ "webmasters.readonly"
+      refute text_of_attr(button, "data-to") =~ "analytics.readonly"
     end
 
     test "displays appropriate error in case of google account `google_auth_error`", %{
@@ -547,7 +558,7 @@ defmodule PlausibleWeb.SiteControllerTest do
         end
       )
 
-      conn = get(conn, "/#{site.domain}/settings/search-console")
+      conn = get(conn, "/#{site.domain}/settings/integrations")
       resp = html_response(conn, 200)
       assert resp =~ "Your Search Console account hasn't been connected successfully"
       assert resp =~ "Please unlink your Google account and try linking it again"
@@ -567,7 +578,7 @@ defmodule PlausibleWeb.SiteControllerTest do
         end
       )
 
-      conn = get(conn, "/#{site.domain}/settings/search-console")
+      conn = get(conn, "/#{site.domain}/settings/integrations")
       resp = html_response(conn, 200)
 
       assert resp =~
@@ -588,7 +599,7 @@ defmodule PlausibleWeb.SiteControllerTest do
         end
       )
 
-      conn = get(conn, "/#{site.domain}/settings/search-console")
+      conn = get(conn, "/#{site.domain}/settings/integrations")
       resp = html_response(conn, 200)
 
       assert resp =~ "Something went wrong, but looks temporary"
@@ -612,7 +623,7 @@ defmodule PlausibleWeb.SiteControllerTest do
 
       log =
         capture_log(fn ->
-          conn = get(conn, "/#{site.domain}/settings/search-console")
+          conn = get(conn, "/#{site.domain}/settings/integrations")
           resp = html_response(conn, 200)
 
           assert resp =~ "Something went wrong, but looks temporary"
@@ -633,14 +644,19 @@ defmodule PlausibleWeb.SiteControllerTest do
     for {title, setting} <- %{
           "Goals" => :conversions_enabled,
           "Funnels" => :funnels_enabled,
-          "Properties" => :props_enabled
+          "Custom Properties" => :props_enabled
         } do
       test "can toggle #{title} with admin access", %{
         user: user,
         conn: conn0
       } do
-        site = insert(:site)
-        insert(:site_membership, user: user, site: site, role: :admin)
+        site =
+          insert(:site,
+            memberships: [
+              build(:site_membership, user: build(:user), role: :owner),
+              build(:site_membership, user: user, role: :admin)
+            ]
+          )
 
         conn =
           put(

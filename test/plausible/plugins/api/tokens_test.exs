@@ -31,26 +31,64 @@ defmodule Plausible.Plugins.API.TokensTest do
     test "finds the right token" do
       site = insert(:site)
       assert {:ok, _, raw} = Tokens.create(site, "My test token")
-      assert {:ok, found} = Tokens.find(site.domain, raw)
+      assert {:ok, found} = Tokens.find(raw)
       assert found.id == found.id
-    end
-
-    test "finds the right token after domain change" do
-      site = insert(:site, domain: "foo1.example.com")
-      assert {:ok, _, raw} = Tokens.create(site, "My test token")
-
-      {:ok, _} = Plausible.Site.Domain.change(site, "foo2.example.com")
-
-      assert {:ok, found} = Tokens.find("foo1.example.com", raw)
-      assert {:ok, ^found} = Tokens.find("foo2.example.com", raw)
+      assert found.site_id == site.id
     end
 
     test "fails to find the token" do
-      site = insert(:site)
-      assert {:ok, _, _} = Tokens.create(site, "My test token")
+      assert {:error, :not_found} = Tokens.find("non-existing")
+    end
+  end
 
-      assert {:error, :not_found} = Tokens.find(site.domain, "non-existing")
-      assert {:error, :not_found} = Tokens.find("non-existing", "non-existing")
+  describe "any?/2" do
+    test "returns if a site has any tokens" do
+      site1 = insert(:site, domain: "foo1.example.com")
+      site2 = insert(:site, domain: "foo2.example.com")
+      assert Tokens.any?(site1) == false
+      assert Tokens.any?(site2) == false
+      assert {:ok, _, _} = Tokens.create(site1, "My test token")
+      assert Tokens.any?(site1) == true
+      assert Tokens.any?(site2) == false
+    end
+  end
+
+  describe "delete/2" do
+    test "deletes a token" do
+      site1 = insert(:site, domain: "foo1.example.com")
+      site2 = insert(:site, domain: "foo2.example.com")
+
+      assert {:ok, t1, _} = Tokens.create(site1, "My test token")
+      assert {:ok, t2, _} = Tokens.create(site1, "My test token")
+      assert {:ok, _, _} = Tokens.create(site2, "My test token")
+
+      :ok = Tokens.delete(site1, t1.id)
+      # idempotent
+      :ok = Tokens.delete(site1, t1.id)
+
+      assert Tokens.any?(site1)
+      :ok = Tokens.delete(site1, t2.id)
+      refute Tokens.any?(site1)
+
+      assert Tokens.any?(site2)
+    end
+  end
+
+  describe "update_last_seen/1" do
+    test "updates in 5m window" do
+      site = insert(:site)
+      assert {:ok, token0, _} = Tokens.create(site, "My test token")
+
+      now = NaiveDateTime.utc_now()
+
+      {:ok, token1} = Tokens.update_last_seen(token0, now)
+      {:ok, token2} = Tokens.update_last_seen(token1, Timex.shift(now, minutes: 2))
+
+      assert token1.last_used_at == token2.last_used_at
+
+      {:ok, token3} = Tokens.update_last_seen(token2, Timex.shift(now, minutes: 6))
+
+      assert NaiveDateTime.compare(token3.last_used_at, token2.last_used_at) == :gt
     end
   end
 end

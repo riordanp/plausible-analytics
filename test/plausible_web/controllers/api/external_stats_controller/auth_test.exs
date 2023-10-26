@@ -149,6 +149,23 @@ defmodule PlausibleWeb.Api.ExternalStatsController.AuthTest do
     })
   end
 
+  test "returns HTTP 402 when user is on a growth plan", %{
+    conn: conn,
+    user: user,
+    api_key: api_key
+  } do
+    insert(:growth_subscription, user: user)
+    site = insert(:site, members: [user])
+
+    conn
+    |> with_api_key(api_key)
+    |> get("/api/v1/stats/aggregate", %{"site_id" => site.domain, "metrics" => "pageviews"})
+    |> assert_error(
+      402,
+      "Stats API is part of the Plausible Business plan. To get access to this feature, please upgrade your account."
+    )
+  end
+
   defp with_api_key(conn, api_key) do
     Plug.Conn.put_req_header(conn, "authorization", "Bearer #{api_key}")
   end

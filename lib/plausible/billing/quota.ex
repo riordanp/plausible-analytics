@@ -4,7 +4,9 @@ defmodule Plausible.Billing.Quota do
   """
 
   import Ecto.Query
-  alias Plausible.Billing.Plans
+  alias Plausible.Billing
+  alias Plausible.Billing.{Plan, Plans, Subscription, EnterprisePlan, Feature}
+  alias Plausible.Billing.Feature.{Goals, RevenueGoals, Funnels, Props}
 
   @limit_sites_since ~D[2021-05-05]
   @spec site_limit(Plausible.Auth.User.t()) :: non_neg_integer() | :unlimited
@@ -28,8 +30,8 @@ defmodule Plausible.Billing.Quota do
     user = Plausible.Users.with_subscription(user)
 
     case Plans.get_subscription_plan(user.subscription) do
-      %Plausible.Billing.EnterprisePlan{} -> :unlimited
-      %Plausible.Billing.Plan{site_limit: site_limit} -> site_limit
+      %EnterprisePlan{} -> :unlimited
+      %Plan{site_limit: site_limit} -> site_limit
       :free_10k -> @site_limit_for_free_10k
       nil -> @site_limit_for_trials
     end
@@ -46,17 +48,17 @@ defmodule Plausible.Billing.Quota do
   @monthly_pageview_limit_for_free_10k 10_000
   @monthly_pageview_limit_for_trials :unlimited
 
-  @spec monthly_pageview_limit(Plausible.Billing.Subscription.t()) ::
+  @spec monthly_pageview_limit(Subscription.t()) ::
           non_neg_integer() | :unlimited
   @doc """
   Returns the limit of pageviews for a subscription.
   """
   def monthly_pageview_limit(subscription) do
     case Plans.get_subscription_plan(subscription) do
-      %Plausible.Billing.EnterprisePlan{monthly_pageview_limit: limit} ->
+      %EnterprisePlan{monthly_pageview_limit: limit} ->
         limit
 
-      %Plausible.Billing.Plan{monthly_pageview_limit: limit} ->
+      %Plan{monthly_pageview_limit: limit} ->
         limit
 
       :free_10k ->
@@ -80,7 +82,7 @@ defmodule Plausible.Billing.Quota do
   """
   def monthly_pageview_usage(user) do
     user
-    |> Plausible.Billing.usage_breakdown()
+    |> Billing.usage_breakdown()
     |> Tuple.sum()
   end
 
@@ -93,8 +95,8 @@ defmodule Plausible.Billing.Quota do
     user = Plausible.Users.with_subscription(user)
 
     case Plans.get_subscription_plan(user.subscription) do
-      %Plausible.Billing.EnterprisePlan{} -> :unlimited
-      %Plausible.Billing.Plan{team_member_limit: limit} -> limit
+      %EnterprisePlan{} -> :unlimited
+      %Plan{team_member_limit: limit} -> limit
       :free_10k -> :unlimited
       nil -> @team_member_limit_for_trials
     end
@@ -106,32 +108,90 @@ defmodule Plausible.Billing.Quota do
   with the user's sites.
   """
   def team_member_usage(user) do
+    Plausible.Repo.aggregate(team_member_usage_query(user), :count)
+  end
+
+  @doc false
+  def team_member_usage_query(user, site \\ nil) do
+    owned_sites_query = owned_sites_query(user)
+
     owned_sites_query =
-      from sm in Plausible.Site.Membership,
-        where: sm.role == :owner and sm.user_id == ^user.id,
-        select: %{site_id: sm.site_id}
+      if site do
+        where(owned_sites_query, [os], os.site_id == ^site.id)
+      else
+        owned_sites_query
+      end
 
     team_members_query =
       from os in subquery(owned_sites_query),
         inner_join: sm in Plausible.Site.Membership,
         on: sm.site_id == os.site_id,
         inner_join: u in assoc(sm, :user),
-        select: %{email: u.email}
+        where: sm.role != :owner,
+        select: u.email
 
-    invitations_and_team_members_query =
-      from i in Plausible.Auth.Invitation,
-        inner_join: os in subquery(owned_sites_query),
-        on: i.site_id == os.site_id,
-        where: i.role != :owner,
-        select: %{email: i.email},
-        union: ^team_members_query
+    from i in Plausible.Auth.Invitation,
+      inner_join: os in subquery(owned_sites_query),
+      on: i.site_id == os.site_id,
+      where: i.role != :owner,
+      select: i.email,
+      union: ^team_members_query
+  end
 
-    query =
-      from itm in subquery(invitations_and_team_members_query),
-        where: itm.email != ^user.email,
-        select: count(itm.email, :distinct)
+  @spec features_usage(Plausible.Auth.User.t()) :: [atom()]
+  @doc """
+  Returns a list of features the given user is using. At the
+  current stage, the only features that we need to know the
+  usage for are `Props`, `Funnels`, and `RevenueGoals`
+  """
+  def features_usage(user) do
+    props_usage_query =
+      from s in Plausible.Site,
+        inner_join: os in subquery(owned_sites_query(user)),
+        on: s.id == os.site_id,
+        where: fragment("cardinality(?) > 0", s.allowed_event_props)
 
-    Plausible.Repo.one(query)
+    funnels_usage_query =
+      from f in Plausible.Funnel,
+        inner_join: os in subquery(owned_sites_query(user)),
+        on: f.site_id == os.site_id
+
+    revenue_goals_usage =
+      from g in Plausible.Goal,
+        inner_join: os in subquery(owned_sites_query(user)),
+        on: g.site_id == os.site_id,
+        where: not is_nil(g.currency)
+
+    queries = [
+      {Props, props_usage_query},
+      {Funnels, funnels_usage_query},
+      {RevenueGoals, revenue_goals_usage}
+    ]
+
+    Enum.reduce(queries, [], fn {feature, query}, acc ->
+      if Plausible.Repo.exists?(query), do: [feature | acc], else: acc
+    end)
+  end
+
+  @doc """
+  Returns a list of features the user can use. Trial users have the
+  ability to use all features during their trial.
+  """
+  def allowed_features_for(user) do
+    user = Plausible.Users.with_subscription(user)
+
+    case Plans.get_subscription_plan(user.subscription) do
+      %EnterprisePlan{} -> Feature.list()
+      %Plan{features: features} -> features
+      :free_10k -> [Goals]
+      nil -> Feature.list()
+    end
+  end
+
+  defp owned_sites_query(user) do
+    from sm in Plausible.Site.Membership,
+      where: sm.role == :owner and sm.user_id == ^user.id,
+      select: %{site_id: sm.site_id}
   end
 
   @spec within_limit?(non_neg_integer(), non_neg_integer() | :unlimited) :: boolean()

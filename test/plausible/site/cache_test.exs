@@ -96,6 +96,7 @@ defmodule Plausible.Site.CacheTest do
 
       # the site was added yesterday so full refresh will pick it up
       %{id: site_id} = site = insert(:site, domain: "site1.example.com", updated_at: yesterday)
+
       # the goal was added yesterday so full refresh will pick it up
       Plausible.Goals.create(site, %{"event_name" => "Purchase", "currency" => :BRL},
         now: yesterday
@@ -382,6 +383,7 @@ defmodule Plausible.Site.CacheTest do
     @items1 for i <- 1..200_000, do: {i, nil, :batch1}
     @items2 for _ <- 1..200_000, do: {Enum.random(1..400_000), nil, :batch2}
     @max_seconds 2
+    @tag :slow
     test "merging large sets is expected to be under #{@max_seconds} seconds", %{test: test} do
       {:ok, _} = start_test_cache(test)
 

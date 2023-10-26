@@ -1,8 +1,9 @@
 defmodule PlausibleWeb.Plugs.AuthorizePluginsAPITest do
   use PlausibleWeb.ConnCase, async: true
 
-  alias Plausible.Plugins.API.Tokens
+  alias Plausible.Plugins.API.{Token, Tokens}
   alias PlausibleWeb.Plugs.AuthorizePluginsAPI
+  alias Plausible.Repo
 
   import Plug.Conn
 
@@ -11,6 +12,21 @@ defmodule PlausibleWeb.Plugs.AuthorizePluginsAPITest do
     {:ok, _, raw} = Tokens.create(site, "Some token")
 
     credentials = "Basic " <> Base.encode64("#{site.domain}:#{raw}")
+
+    conn =
+      build_conn()
+      |> put_req_header("authorization", credentials)
+      |> AuthorizePluginsAPI.call()
+
+    refute conn.halted
+    assert %Plausible.Site{id: ^site_id} = conn.assigns.authorized_site
+  end
+
+  test "plug passes when a token is found, no domain provided" do
+    %{id: site_id} = site = insert(:site, domain: "pass.example.com")
+    {:ok, _, raw} = Tokens.create(site, "Some token")
+
+    credentials = "Basic " <> Base.encode64(raw)
 
     conn =
       build_conn()
@@ -52,5 +68,23 @@ defmodule PlausibleWeb.Plugs.AuthorizePluginsAPITest do
                %{"detail" => "Plugins API: unauthorized"}
              ]
            }
+  end
+
+  test "plug updates last seen timestamp" do
+    site = insert(:site, domain: "pass.example.com")
+    {:ok, token, raw} = Tokens.create(site, "Some token")
+
+    refute token.last_used_at
+    assert Token.last_used_humanize(token) == "Not yet"
+
+    credentials = "Basic " <> Base.encode64(raw)
+
+    build_conn()
+    |> put_req_header("authorization", credentials)
+    |> AuthorizePluginsAPI.call()
+
+    token = Repo.reload!(token)
+    assert token.last_used_at
+    assert Token.last_used_humanize(token) == "Just recently"
   end
 end

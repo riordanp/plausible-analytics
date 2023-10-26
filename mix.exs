@@ -74,8 +74,7 @@ defmodule Plausible.MixProject do
       {:envy, "~> 1.1.1"},
       {:ex_machina, "~> 2.3", only: [:dev, :test]},
       {:excoveralls, "~> 0.10", only: :test},
-      {:exvcr, "~> 0.11", only: :test},
-      {:finch, "~> 0.14.0", override: true},
+      {:finch, "~> 0.16.0"},
       {:floki, "~> 0.34.3", only: [:dev, :test]},
       {:fun_with_flags, "~> 1.9.0"},
       {:fun_with_flags_ui, "~> 0.8"},
@@ -124,6 +123,7 @@ defmodule Plausible.MixProject do
       {:heroicons, "~> 0.5.0"},
       {:zxcvbn, git: "https://github.com/techgaun/zxcvbn-elixir.git"},
       {:open_api_spex, "~> 3.18"},
+      {:joken, "~> 2.5"},
       {:paginator, git: "https://github.com/duffelhq/paginator.git"}
     ]
   end

@@ -1,14 +1,9 @@
 <section class="shadow bg-white dark:bg-gray-800 sm:rounded-md sm:overflow-hidden">
-  <PlausibleWeb.Components.Generic.notice class="rounded-t-md rounded-b-none">
-    Funnels is an upcoming premium feature that's free-to-use
-    during the private preview. Pricing will be announced soon. See
-    examples and learn more in <a
-      class="font-medium text-yellow underline hover:text-yellow-600"
-      target="_blank"
-      rel="noreferrer"
-      href="https://plausible.io/docs/funnel-analysis"
-    >our docs</a>.
-  </PlausibleWeb.Components.Generic.notice>
+  <PlausibleWeb.Components.Billing.premium_feature_notice
+    billable_user={@site.owner}
+    current_user={@current_user}
+    feature_mod={Plausible.Billing.Feature.Funnels}
+  />
 
   <div class="py-6 px-4 sm:p-6">
     <header class="relative">
@@ -17,27 +12,12 @@
         Compose Goals into Funnels
       </p>
 
-      <%= link(to: "https://plausible.io/docs/funnel-analysis", target: "_blank", rel: "noreferrer") do %>
-        <svg
-          class="w-6 h-6 absolute top-0 right-0 text-gray-400"
-          fill="currentColor"
-          viewBox="0 0 20 20"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <path
-            fill-rule="evenodd"
-            d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
-            clip-rule="evenodd"
-          >
-          </path>
-        </svg>
-      <% end %>
+      <PlausibleWeb.Components.Generic.docs_info slug="funnel-analysis" />
     </header>
 
     <PlausibleWeb.Components.Site.Feature.toggle
+      feature_mod={Plausible.Billing.Feature.Funnels}
       site={@site}
-      setting={:funnels_enabled}
-      label="Show Funnels in the Dashboard"
       conn={@conn}
     >
       <%= live_render(@conn, PlausibleWeb.Live.FunnelSettings,

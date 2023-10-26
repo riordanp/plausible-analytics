@@ -1,30 +1,3 @@
-defmodule Plausible.Billing.Plan do
-  @moduledoc false
-
-  @derive Jason.Encoder
-
-  @enforce_keys ~w(kind site_limit monthly_pageview_limit team_member_limit volume monthly_product_id yearly_product_id)a
-  defstruct @enforce_keys ++ [:monthly_cost, :yearly_cost]
-
-  @type t() ::
-          %__MODULE__{
-            kind: atom(),
-            monthly_pageview_limit: non_neg_integer(),
-            site_limit: non_neg_integer(),
-            team_member_limit: non_neg_integer() | :unlimited,
-            volume: String.t(),
-            monthly_cost: Money.t() | nil,
-            yearly_cost: Money.t() | nil,
-            monthly_product_id: String.t() | nil,
-            yearly_product_id: String.t() | nil
-          }
-          | :enterprise
-
-  def new(params) when is_map(params) do
-    struct!(__MODULE__, params)
-  end
-end
-
 defmodule Plausible.Billing.Plans do
   alias Plausible.Billing.Subscriptions
   use Plausible.Repo
@@ -32,12 +5,11 @@ defmodule Plausible.Billing.Plans do
   alias Plausible.Auth.User
 
   for f <- [
+        :legacy_plans,
         :plans_v1,
         :plans_v2,
         :plans_v3,
         :plans_v4,
-        :unlisted_plans_v1,
-        :unlisted_plans_v2,
         :sandbox_plans
       ] do
     path = Application.app_dir(:plausible, ["priv", "#{f}.json"])
@@ -46,22 +18,7 @@ defmodule Plausible.Billing.Plans do
       path
       |> File.read!()
       |> Jason.decode!(keys: :atoms!)
-      |> Enum.map(fn raw ->
-        team_member_limit =
-          case raw.team_member_limit do
-            number when is_integer(number) -> number
-            "unlimited" -> :unlimited
-            _any -> raise ArgumentError, "Failed to parse team member limit from plan JSON files"
-          end
-
-        volume = PlausibleWeb.StatsView.large_number_format(raw.monthly_pageview_limit)
-
-        raw
-        |> Map.put(:volume, volume)
-        |> Map.put(:kind, String.to_atom(raw.kind))
-        |> Map.put(:team_member_limit, team_member_limit)
-        |> Plan.new()
-      end)
+      |> Enum.map(&Plan.build!(&1, f))
 
     Module.put_attribute(__MODULE__, f, plans_list)
 
@@ -80,26 +37,34 @@ defmodule Plausible.Billing.Plans do
   def growth_plans_for(%User{} = user) do
     user = Plausible.Users.with_subscription(user)
     v4_available = FunWithFlags.enabled?(:business_tier, for: user)
-    owned_plan_id = user.subscription && user.subscription.paddle_plan_id
+    owned_plan = get_regular_plan(user.subscription)
 
     cond do
-      find(owned_plan_id, @plans_v1) -> @plans_v1
-      find(owned_plan_id, @plans_v2) -> @plans_v2
-      find(owned_plan_id, @plans_v3) -> @plans_v3
-      find(owned_plan_id, plans_sandbox()) -> plans_sandbox()
-      Application.get_env(:plausible, :environment) == "dev" -> plans_sandbox()
-      Timex.before?(user.inserted_at, ~D[2022-01-01]) -> @plans_v2
-      v4_available -> Enum.filter(@plans_v4, &(&1.kind == :growth))
-      true -> @plans_v3
+      Application.get_env(:plausible, :environment) == "dev" -> @sandbox_plans
+      !owned_plan -> if v4_available, do: @plans_v4, else: @plans_v3
+      owned_plan.kind == :business -> @plans_v4
+      owned_plan.generation == 1 -> @plans_v1
+      owned_plan.generation == 2 -> @plans_v2
+      owned_plan.generation == 3 -> @plans_v3
+      owned_plan.generation == 4 -> @plans_v4
     end
+    |> Enum.filter(&(&1.kind == :growth))
   end
 
-  def business_plans() do
-    Enum.filter(@plans_v4, &(&1.kind == :business))
+  def business_plans_for(%User{} = user) do
+    user = Plausible.Users.with_subscription(user)
+    owned_plan = get_regular_plan(user.subscription)
+
+    cond do
+      Application.get_env(:plausible, :environment) == "dev" -> @sandbox_plans
+      owned_plan && owned_plan.generation < 4 -> @plans_v3
+      true -> @plans_v4
+    end
+    |> Enum.filter(&(&1.kind == :business))
   end
 
   def available_plans_with_prices(%User{} = user) do
-    (growth_plans_for(user) ++ business_plans())
+    (growth_plans_for(user) ++ business_plans_for(user))
     |> with_prices()
     |> Enum.group_by(& &1.kind)
   end
@@ -114,12 +79,10 @@ defmodule Plausible.Billing.Plans do
         do: yearly_product_id
   end
 
-  defp find(product_id, scope \\ all())
+  defp find(nil), do: nil
 
-  defp find(nil, _scope), do: nil
-
-  defp find(product_id, scope) do
-    Enum.find(scope, fn plan ->
+  defp find(product_id) do
+    Enum.find(all(), fn plan ->
       product_id in [plan.monthly_product_id, plan.yearly_product_id]
     end)
   end
@@ -132,6 +95,19 @@ defmodule Plausible.Billing.Plans do
     else
       get_regular_plan(subscription) || get_enterprise_plan(subscription)
     end
+  end
+
+  def latest_enterprise_plan_with_price(user) do
+    enterprise_plan =
+      Repo.one!(
+        from(e in EnterprisePlan,
+          where: e.user_id == ^user.id,
+          order_by: [desc: e.inserted_at],
+          limit: 1
+        )
+      )
+
+    {enterprise_plan, get_price_for(enterprise_plan)}
   end
 
   def subscription_interval(subscription) do
@@ -185,6 +161,13 @@ defmodule Plausible.Billing.Plans do
     end
   end
 
+  def get_price_for(%EnterprisePlan{paddle_plan_id: product_id}) do
+    case Plausible.Billing.paddle_api().fetch_prices([product_id]) do
+      {:ok, prices} -> Map.fetch!(prices, product_id)
+      {:error, :api_error} -> nil
+    end
+  end
+
   defp get_enterprise_plan(%Subscription{} = subscription) do
     Repo.get_by(EnterprisePlan,
       user_id: subscription.user_id,
@@ -217,7 +200,7 @@ defmodule Plausible.Billing.Plans do
   def suggest(user, usage_during_cycle) do
     cond do
       usage_during_cycle > @enterprise_level_usage -> :enterprise
-      Plausible.Auth.enterprise?(user) -> :enterprise
+      Plausible.Auth.enterprise_configured?(user) -> :enterprise
       true -> suggest_by_usage(user, usage_during_cycle)
     end
   end
@@ -227,22 +210,13 @@ defmodule Plausible.Billing.Plans do
 
     available_plans =
       if business_tier?(user.subscription),
-        do: business_plans(),
+        do: business_plans_for(user),
         else: growth_plans_for(user)
 
     Enum.find(available_plans, &(usage_during_cycle < &1.monthly_pageview_limit))
   end
 
   defp all() do
-    @plans_v1 ++
-      @unlisted_plans_v1 ++
-      @plans_v2 ++ @unlisted_plans_v2 ++ @plans_v3 ++ @plans_v4 ++ plans_sandbox()
-  end
-
-  defp plans_sandbox() do
-    case Application.get_env(:plausible, :environment) do
-      "dev" -> @sandbox_plans
-      _ -> []
-    end
+    @legacy_plans ++ @plans_v1 ++ @plans_v2 ++ @plans_v3 ++ @plans_v4
   end
 end
